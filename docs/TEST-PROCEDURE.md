@@ -1,111 +1,141 @@
-# Test procedure, round 1
+# Test procedure
 
-Goal: find out **when** the stutter happens and what runs in that frame. About an hour, on the
-machine you play on. Nothing here deletes or changes your mods.
+Round 1 takes about 45 minutes and finds out **what the stutter is tied to**. Round 2 tests only
+what Round 1 points to, so most of it will never be needed.
+
+Nothing here deletes or changes your mods. Keep your normal mods and HollywoodFX settings for
+Round 1, because that's the setup where you get the stutter.
 
 ## Setup, once
 
-1. Unzip `FirstShotSmoothness-0.0.1.zip` over your SPT
-   root, so you get `BepInEx\plugins\FirstShotSmoothness.dll`.
+1. Unzip `FirstShotSmoothness-0.0.3.zip` over your SPT root, so you get
+   `BepInEx\plugins\FirstShotSmoothness.dll`.
 2. Start the game once, then quit. This creates
    `BepInEx\config\com.mybutthasarash.firstshotsmoothness.cfg`.
-3. In that file set:
-   - `Diagnostics Enabled = true`
-   - `Probe Level = EventsOnly`
-4. Start the game and check `BepInEx\LogOutput.log` for `Diagnostics on.` If you see lines with
-   `MISSING` or `FAILED`, stop and send me the log: your build differs from the one I inspected.
-5. Leave these alone for every run below: graphics settings, FPS cap, VSync, resolution, mods.
-   Do not clear any shader or driver cache.
+3. In that file set `Diagnostics Enabled = true`.
+4. Set `Felt A Stutter Key` to something you can hit mid-fight. The default is F9, which I haven't
+   checked against your keybinds. A spare mouse side button works too (`Mouse3` or `Mouse4`).
+5. Get [PresentMon](https://github.com/GameTechDev/PresentMon), the console exe, from its releases
+   page. It shows the frames your display actually got, which this mod can't see.
+6. Copy this repo's `scripts` folder somewhere on that PC.
 
-**The fixed test**
+Leave these alone for every run: graphics settings, FPS cap, VSync, resolution, mods. Don't clear
+any shader or driver cache.
 
-- Map: Factory, daytime, offline. **AI Amount: None** if your raid settings offer it. If they
-  don't, say so in your notes.
-- Loadout: one automatic rifle with no suppressor, one ammo type, and a pistol. Same every time.
-- **Do not open your inventory during a raid**, and don't alt-tab. Opening the inventory changes
-  the game's garbage collection for the rest of that raid, which would muddy the test.
-- After spawning, stand still for 20 seconds, then look at open sky if you can, or the farthest
-  surface you can see.
+## Smoke test, 5 minutes
 
-**What counts as a first shot:** the first round you fire in that launch or raid, after that
-20-second wait. The report flags these automatically.
+This build has never run in the game, so check it first.
 
-**Shot spacing:** single shots 3 seconds apart. This keeps windows separate, and stays clear of a
-once-per-second game timer that could otherwise look like a first-shot effect.
+1. Start the game and open `BepInEx\LogOutput.log`. You should see `Diagnostics on.`
+2. Do a short raid, fire a few shots, press your stutter key, and leave.
+3. The log should say `Report written:`, with a new folder in `FirstShotSmoothness-reports`.
 
-## Run A: app launch vs raid (5 launches, `EventsOnly`)
+**Stop and send me the log if** you see `MISSING` or `FAILED` lines, no report appears, or the game
+crashes. `MuzzleManager.Shot` and `Effects.Emit` matter most, because I couldn't test those two
+here. If it crashes, set `Runtime JIT And GC Events = false` and try again.
 
-Each launch counts as one independent sample, so more shots in one raid do not substitute for it.
+Delete that test report before starting Round 1.
 
-For each launch, set `Run Label` to `A1`, `A2` ... `A5` before starting the game:
+## Round 1
 
-1. Start the game. Do not fire anything in the hideout.
-2. **Raid 1:** the fixed test. Fire 10 single shots 3 s apart. Wait 5 s. Fire one 3-second
-   full-auto burst. Wait 5 s.
-3. Leave the raid (Esc, Leave) and return to the menu. Wait for `Report written` in the log.
-4. **Raid 2, same launch:** exactly the same actions.
-5. Quit the game fully.
+### Run S: firing at nothing (2 launches)
 
-Do **A1 right after a reboot** and note that, because the first read of game files from disk can
-cost far more than later reads. A2 to A5 can follow one after another.
+Set `Probe Level = EventsOnly`, because this patches the least and gives the cleanest view of
+first-use work. Use labels `S1` and `S2` in `Run Label`.
 
-## Run B: stages and switching (3 launches, `Stages`)
+- Map: Factory, offline, **AI Amount: None** if your raid settings offer it. Otherwise tell me.
+- Loadout: an automatic rifle with no suppressor and an optic if you normally use one, plus a
+  pistol. Same every time. Write down the ammo.
+- Don't open your inventory or alt-tab.
 
-Set `Probe Level = Stages`, labels `B1` to `B3`. One raid each, same start, then:
+For each launch:
 
-1. 5 single shots at the sky, 3 s apart.
-2. 5 single shots at a nearby concrete wall, 3 s apart.
-3. 5 single shots at a metal surface or the ground, 3 s apart.
-4. Switch to the pistol, wait 3 s, 3 shots, 3 s apart.
-5. Switch back to the rifle, wait 3 s, 3 shots.
-6. Stand still for 2 minutes, then 3 shots.
+1. Start the game. Don't fire in the hideout.
+2. Raid 1: stand still for 20 s after spawning, then look at open sky or the farthest surface you
+   can see.
+3. Fire 10 single shots, 3 s apart.
+4. Fire a 3-second burst. Wait 5 s.
+5. Switch to the pistol, wait 3 s, and fire 3 shots, 3 s apart.
+6. Switch back, wait 60 s, and fire 3 single shots, 3 s apart.
+7. Leave the raid and wait for `Report written` in the log.
+8. Raid 2, same launch: exactly the same steps.
+9. Quit fully.
 
-## Run C: bots (2 launches, `Stages`)
+Do `S1` right after a reboot and tell me you did. Cold disk reads can cost far more than later ones.
 
-Labels `C1`, `C2`. **AI Amount: Medium**, same map. One raid each: 10 single shots at the sky,
-3 s apart, then kill one bot if you meet one. Just play naturally after that.
+### Run G: real gunfights (2 launches, the important one)
 
-## Tell me how it feels
+Set `Probe Level = Stages`, labels `G1` and `G2`.
 
-Please write a few lines, because this settles what we are actually chasing:
+For each launch, start the capture **before** the game, from an administrator PowerShell if
+PresentMon needs it:
 
-- Do you feel it on the first shot only, every first shot of a burst, or every shot?
-- Is it every raid, or only the first raid after launching?
-- Roughly how long does it feel: a blip, or a clear freeze?
-- Which runs felt worst?
+```
+powershell -ExecutionPolicy Bypass -File scripts\capture.ps1 -SPTPath H:\SPT4.1.X -Label G1 -PresentMon C:\Tools\PresentMon.exe
+```
 
-## What to send
+Then play normally, on a map and with bots where you usually get the stutter. Aim for at least
+10 minutes with several real fights. Same map both times if you can.
 
-Zip these and send them:
+- **Press your stutter key every time you feel the stutter.** A late press is fine, since it looks
+  back 1.5 seconds. Don't press it when you don't feel one.
+- Opening your inventory is fine here. Play as you normally would.
+- Leave the raid properly, or die, so the report gets written, then quit the game.
 
-- The whole `FirstShotSmoothness-reports` folder in your SPT root.
-- `BepInEx\LogOutput.log` from the last run.
-- `%USERPROFILE%\AppData\LocalLow\Battlestate Games\EscapeFromTarkov\Player.log`, if it exists.
-- Your notes, including anything that went wrong in a run.
+The capture stops by itself when the game closes.
 
-Keep a failed run rather than deleting it: say what happened and it will be marked as excluded,
-with the reason. A run is only excluded for a stated cause, such as alt-tabbing, opening the
-inventory, or a counter in `session.txt` showing dropped data. Never because its numbers look odd.
+### Send
 
-**If a report is missing for a raid:** a raid with no shots writes nothing, on purpose. If the
-game crashes, send the log and turn off `Runtime JIT And GC Events`, then retest.
+```
+powershell -ExecutionPolicy Bypass -File scripts\pack-results.ps1 -SPTPath H:\SPT4.1.X
+```
 
-**Optional but valuable:** PresentMon captures presented frames, which this mod cannot see.
-Run `PresentMon --process_name EscapeFromTarkov.exe --output_file a1.csv --qpc_time` alongside A1
-and B1. Its timestamps line up with the report's `qpc` columns.
+That makes a results zip in your SPT folder, with no profile or save data. Please also tell me:
+
+- Your mouse polling rate, and whether the game is on an SSD.
+- Roughly how many times per fight you felt it, and what you were doing: firing, being shot at,
+  killing something, or just nearby.
+- Anything that went wrong in a run. Keep failed runs instead of deleting them. A run is only
+  excluded for a stated cause, such as alt-tabbing or dropped data in `session.txt`, never because
+  its numbers look odd.
+
+## Round 2: only the parts Round 1 points to
+
+Each comparison changes one thing. Use at least 3 launches per setup, in mirrored order such as
+A, B, B, A, A, B, so warming caches don't favour one. Same map, bots and route each time.
+
+| If Round 1 points to | Compare | How |
+|---|---|---|
+| Spent shells and ammo pool growth | Lifetime 60 s against 1 s | HollywoodFX `Spent Shells Lifetime (seconds)`. Fire 3 full magazines inside 60 s, wait 70 s, fire 1 more |
+| Blood and gore | On against off | HollywoodFX `Enable Gore Effects` |
+| Ragdoll physics after kills | On against off | HollywoodFX `Enable Ragdoll Effects (RESTART)` |
+| Muzzle effects | On against off | HollywoodFX `Enable Muzzle Effects (RESTART)` |
+| Muzzle light shadows | On against off | HollywoodFX `Enable Muzzle Light Shadow (RESTART)` |
+| HollywoodFX as a whole | Installed against not | Move its files out of `BepInEx\plugins`, and back afterwards |
+| The round inside the weapon | Drawn against hidden | This mod's `Hide Rounds Inside Weapon` |
+| Bot hearing | On against off | This mod's `Suppress Bot Hearing` |
+| Weapon audio | On against off | This mod's `Suppress Weapon Audio` |
+| Your impact effects | On against off | This mod's `Suppress Impact Effects` |
+| Scope or tracers | With against without | Loadout change only |
+| The diagnostics themselves | Plugin removed against plugin on | PresentMon decides this one |
+
+Back up `BepInEx\config\com.janky.hollywoodfx.cfg` before changing it. The Suppress and Hide
+settings change the game, so turn them off for normal play.
 
 ## How results are judged
 
-- Baseline: median frame time of up to 60 frames before the shot, stopping at the previous shot.
-- Spike: slowest of the shot frame and the next 3, at least 3 ms and 1.5x over its baseline.
-- First-shot claims use one number per launch, 5 from Run A. They are shown individually, with
-  absolute times, not just as an average.
-- Near-shot spikes are compared with the rate of slow frames away from shots.
+- Baseline: median frame time of up to 60 saved frames just before.
+- Spike: a frame at least 3 ms and 1.5x over its baseline.
+- "Near" an event: within 200 ms. This shows what was happening, not what caused it, so spikes
+  are compared with other frames, and only a Round 2 comparison can show a cause.
+- Claims about launches use one number per launch, shown individually with absolute times.
+- A key press with no spike means that stutter wasn't a slow main-thread frame. PresentMon, recoil
+  and audio come next.
 
-These thresholds are starting definitions, set before seeing data. If they change, the report
-will say so and show both.
+These thresholds were set before seeing any data. If they change, the results will say so and
+show both.
 
 ## Removing it
 
-Delete `BepInEx\plugins\FirstShotSmoothness.dll`, the `.cfg` above, and the
-`FirstShotSmoothness-reports` folder. Nothing else was touched.
+Delete `BepInEx\plugins\FirstShotSmoothness.dll`, its `.cfg`, the `FirstShotSmoothness-reports`
+folder, and any results zip. Nothing else was touched.

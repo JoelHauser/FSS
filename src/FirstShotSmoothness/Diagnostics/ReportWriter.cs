@@ -85,7 +85,7 @@ namespace FirstShotSmoothness.Diagnostics
                     file.Write(',');
                     file.Write(((Mark)m).ToString());
                 }
-                file.WriteLine(",gc_count,heap_bytes,gc_mode,gpu_us,cpu_us");
+                file.WriteLine(",gc_count,heap_bytes,gc_mode,gpu_us,cpu_us,physics_steps");
                 for (int i = 0; i < s.KeptCount; i++)
                 {
                     int at = i * Session.FrameStride;

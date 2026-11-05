@@ -19,6 +19,24 @@ namespace FirstShotSmoothness.Diagnostics
         RenderStart,
         RenderEnd,
         LoopEnd,
+        PreloadStart,
+        PreloadEnd,
+        ScriptUpdateStart,
+        ScriptUpdateEnd,
+        AnimationStart,
+        AnimationEnd,
+        LateScriptStart,
+        LateScriptEnd,
+        ParticlesBeginStart,
+        ParticlesBeginEnd,
+        ParticlesEndStart,
+        ParticlesEndEnd,
+        SkinnedMeshesStart,
+        SkinnedMeshesEnd,
+        RenderersStart,
+        RenderersEnd,
+        PresentStart,
+        PresentEnd,
         Count
     }
 
@@ -31,7 +49,11 @@ namespace FirstShotSmoothness.Diagnostics
         DryFire,
         ShotLink,
         Impact,
-        ClipState
+        ClipState,
+        PoolObjectCreated,
+        Kill,
+        HitOnLocal,
+        FeltStutter
     }
 
     internal enum Shooter
@@ -76,7 +98,8 @@ namespace FirstShotSmoothness.Diagnostics
         public const int FrameGcMode = FrameHeapBytes + 1;
         public const int FrameGpuMicros = FrameGcMode + 1;
         public const int FrameCpuMicros = FrameGpuMicros + 1;
-        public const int FrameStride = FrameCpuMicros + 1;
+        public const int FramePhysicsSteps = FrameCpuMicros + 1;
+        public const int FrameStride = FramePhysicsSteps + 1;
 
         public const int EventTime = 0;
         public const int EventFrame = 1;
@@ -103,6 +126,9 @@ namespace FirstShotSmoothness.Diagnostics
 
         public const int HistogramBuckets = 400;
         public const double HistogramBucketMs = 0.25;
+
+        /// <summary>A bot's shot keeps a short window, as a comparison for frames near combat.</summary>
+        private const int OtherShotFramesAfter = 60;
 
         private const int RingFrames = 2048;
         private const int RingMask = RingFrames - 1;
@@ -187,6 +213,27 @@ namespace FirstShotSmoothness.Diagnostics
             _ring[(int)(_frame & RingMask) * FrameStride + FrameMarks + (int)mark] = now;
         }
 
+        /// <summary>
+        /// One physics step starting. A slow frame can run several, and all of them belong to the
+        /// physics phase, so the mark keeps the first step's time and the steps are counted.
+        /// </summary>
+        public void MarkFixedStep(long now)
+        {
+            int slot = (int)(_frame & RingMask) * FrameStride;
+            int mark = slot + FrameMarks + (int)Mark.FixedUpdate;
+            if (_ring[mark] == 0)
+            {
+                _ring[mark] = now;
+            }
+            _ring[slot + FramePhysicsSteps]++;
+        }
+
+        /// <summary>Keeps the next frames too, on top of what a window already holds.</summary>
+        public void RetainFrames(int frames)
+        {
+            RetainThrough(_frame + frames);
+        }
+
         private void WatchForHitch(long frame, long total)
         {
             // Hitches keep a window of their own, so a stall with no shot near it is on record.
@@ -261,6 +308,10 @@ namespace FirstShotSmoothness.Diagnostics
                 _lastLocalShot = _frame;
                 RetainThrough(_frame + FramesAfter);
             }
+            else
+            {
+                RetainThrough(_frame + Math.Min(OtherShotFramesAfter, FramesAfter));
+            }
             if (ShotCount >= ShotCapacity)
             {
                 ShotsDropped++;
@@ -319,10 +370,8 @@ namespace FirstShotSmoothness.Diagnostics
 
         public static int MainThread;
 
-        /// <summary>Per-frame probes only leave a row at or above this, to keep idle frames out.</summary>
-        public static long QuietThresholdTicks = Stopwatch.Frequency / 10000;
-
-        public static bool[] Quiet = new bool[64];
+        /// <summary>A frequent probe only leaves a row at or above its entry here, to keep idle frames out.</summary>
+        public static readonly long[] QuietTicks = new long[64];
 
         private static readonly long[] Start = new long[MaxDepth];
         private static readonly long[] Children = new long[MaxDepth];
@@ -365,7 +414,7 @@ namespace FirstShotSmoothness.Diagnostics
             {
                 Children[depth - 1] += inclusive;
             }
-            if (Quiet[probe] && inclusive < QuietThresholdTicks)
+            if (inclusive < QuietTicks[probe])
             {
                 return;
             }

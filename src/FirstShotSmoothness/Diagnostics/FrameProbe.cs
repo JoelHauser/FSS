@@ -63,16 +63,35 @@ namespace FirstShotSmoothness.Diagnostics
                 Type type = phases[i].type;
                 if (type == typeof(TimeUpdate)) { Add(ref phases[i], 0, Entry(LoopStart)); }
                 else if (type == typeof(Initialization)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.Initialization))); }
-                else if (type == typeof(EarlyUpdate)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.EarlyUpdate))); }
-                else if (type == typeof(FixedUpdate)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.FixedUpdate))); }
+                else if (type == typeof(EarlyUpdate))
+                {
+                    Add(ref phases[i], 0, Entry(() => Stamp(Mark.EarlyUpdate)));
+                    Around(ref phases[i], typeof(EarlyUpdate.UpdatePreloading), Mark.PreloadStart, Mark.PreloadEnd);
+                }
+                else if (type == typeof(FixedUpdate)) { Add(ref phases[i], 0, Entry(FixedStep)); }
                 else if (type == typeof(PreUpdate)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.PreUpdate))); }
-                else if (type == typeof(Update)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.Update))); }
-                else if (type == typeof(PreLateUpdate)) { Add(ref phases[i], 0, Entry(() => Stamp(Mark.PreLateUpdate))); }
+                else if (type == typeof(Update))
+                {
+                    Add(ref phases[i], 0, Entry(() => Stamp(Mark.Update)));
+                    Around(ref phases[i], typeof(Update.ScriptRunBehaviourUpdate), Mark.ScriptUpdateStart, Mark.ScriptUpdateEnd);
+                }
+                else if (type == typeof(PreLateUpdate))
+                {
+                    Add(ref phases[i], 0, Entry(() => Stamp(Mark.PreLateUpdate)));
+                    Before(ref phases[i], typeof(PreLateUpdate.DirectorUpdateAnimationBegin), Mark.AnimationStart);
+                    After(ref phases[i], typeof(PreLateUpdate.DirectorUpdateAnimationEnd), Mark.AnimationEnd);
+                    Around(ref phases[i], typeof(PreLateUpdate.ScriptRunBehaviourLateUpdate), Mark.LateScriptStart, Mark.LateScriptEnd);
+                    Around(ref phases[i], typeof(PreLateUpdate.ParticleSystemBeginUpdateAll), Mark.ParticlesBeginStart, Mark.ParticlesBeginEnd);
+                }
                 else if (type == typeof(PostLateUpdate))
                 {
                     Add(ref phases[i], 0, Entry(() => Stamp(Mark.PostLateUpdate)));
                     Around(ref phases[i], typeof(PostLateUpdate.UpdateAudio), Mark.AudioStart, Mark.AudioEnd);
                     Around(ref phases[i], typeof(PostLateUpdate.FinishFrameRendering), Mark.RenderStart, Mark.RenderEnd);
+                    Around(ref phases[i], typeof(PostLateUpdate.ParticleSystemEndUpdateAll), Mark.ParticlesEndStart, Mark.ParticlesEndEnd);
+                    Around(ref phases[i], typeof(PostLateUpdate.UpdateAllSkinnedMeshes), Mark.SkinnedMeshesStart, Mark.SkinnedMeshesEnd);
+                    Around(ref phases[i], typeof(PostLateUpdate.UpdateAllRenderers), Mark.RenderersStart, Mark.RenderersEnd);
+                    Around(ref phases[i], typeof(PostLateUpdate.PresentAfterDraw), Mark.PresentStart, Mark.PresentEnd);
                     Add(ref phases[i], phases[i].subSystemList.Length, Entry(() => Stamp(Mark.LoopEnd)));
                 }
             }
@@ -101,6 +120,24 @@ namespace FirstShotSmoothness.Diagnostics
             phase.subSystemList = list.ToArray();
         }
 
+        private static void Before(ref PlayerLoopSystem phase, Type target, Mark mark)
+        {
+            int index = Array.FindIndex(phase.subSystemList, s => s.type == target);
+            if (index >= 0)
+            {
+                Add(ref phase, index, Entry(() => Stamp(mark)));
+            }
+        }
+
+        private static void After(ref PlayerLoopSystem phase, Type target, Mark mark)
+        {
+            int index = Array.FindIndex(phase.subSystemList, s => s.type == target);
+            if (index >= 0)
+            {
+                Add(ref phase, index + 1, Entry(() => Stamp(mark)));
+            }
+        }
+
         private static void Around(ref PlayerLoopSystem phase, Type target, Mark before, Mark after)
         {
             int index = Array.FindIndex(phase.subSystemList, s => s.type == target);
@@ -124,6 +161,11 @@ namespace FirstShotSmoothness.Diagnostics
                 text.AppendLine();
             }
             return text.ToString();
+        }
+
+        private static void FixedStep()
+        {
+            Recorder.Current?.MarkFixedStep(Stopwatch.GetTimestamp());
         }
 
         private static void Stamp(Mark mark)

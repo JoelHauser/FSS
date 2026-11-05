@@ -29,6 +29,7 @@ internal static class HarnessMain
 
         NativeTest();
         WindowTest();
+        ClockTest();
         NestingTest();
         OverflowTest();
         ReportTest(outDir);
@@ -216,7 +217,36 @@ internal static class HarnessMain
         for (int i = 0; i < 40; i++) { Tick(s); }
         s.AddShot(Shooter.Bot, 0, 0, 0, ShotFlags.None, 0, 0, _time);
         for (int i = 0; i < 60; i++) { Tick(s); }
-        Check(s.KeptCount == 0 && s.ShotCount == 1, "a bot shot is recorded but opens no window");
+        Check(s.KeptCount > 0 && s.KeptCount <= 10 + 1 + 20 && s.ShotCount == 1 && s.Histogram.Skip(Session.HistogramBuckets).Sum() == 0, "a bot shot keeps a window but does not count as near a local shot");
+
+        s = new Session(10, 300, 8, 4096, 16, 16);
+        for (int i = 0; i < 40; i++) { Tick(s); }
+        s.AddShot(Shooter.Bot, 0, 0, 0, ShotFlags.None, 0, 0, _time);
+        for (int i = 0; i < 400; i++) { Tick(s); }
+        Check(s.KeptCount == 10 + 1 + 60, "a bot shot's window is capped at 60 frames after it: " + s.KeptCount);
+
+        s = Fresh(10, 20, 8192);
+        for (int i = 0; i < 40; i++) { Tick(s); }
+        long killFrame = s.Frame;
+        s.RetainFrames(1500);
+        for (int i = 0; i < 1600; i++) { Tick(s); }
+        Check(s.KeptCount == 1500 + 11, "a death keeps its long window: " + s.KeptCount);
+
+        s = Fresh(10, 20);
+        for (int i = 0; i < 20; i++) { Tick(s); }
+        s.AddShot(Shooter.Local, 0, 0, 0, ShotFlags.None, 0, 0, _time);
+        long stepped = s.Frame;
+        s.MarkFixedStep(111);
+        s.MarkFixedStep(222);
+        s.MarkFixedStep(333);
+        for (int i = 0; i < 40; i++) { Tick(s); }
+        long Field(long frame, int field)
+        {
+            int row = Array.IndexOf(KeptIds(s), frame);
+            return s.Kept[row * Session.FrameStride + field];
+        }
+        Check(Field(stepped, Session.FrameMarks + (int)Mark.FixedUpdate) == 111 && Field(stepped, Session.FramePhysicsSteps) == 3, "several physics steps keep the first start time and count them");
+        Check(Field(stepped + 1, Session.FramePhysicsSteps) == 0, "a frame with no physics step counts none");
 
         s = Fresh(10, 20);
         for (int i = 0; i < 5; i++) { Tick(s); }
@@ -224,6 +254,17 @@ internal static class HarnessMain
         Tick(s);
         s.Finish();
         Check(s.KeptCount >= 4 && KeptIds(s).Distinct().Count() == s.KeptCount, "a raid ending inside a window flushes without duplicates: " + s.KeptCount);
+    }
+
+    private static void ClockTest()
+    {
+        ClockSync.Read(out long sw0, out long raw0, out long rawFrequency);
+        Spin(200);
+        ClockSync.Read(out long sw1, out long raw1, out _);
+        double swMs = (sw1 - sw0) * 1000.0 / Stopwatch.Frequency;
+        double rawMs = (raw1 - raw0) * 1000.0 / rawFrequency;
+        Console.WriteLine("      Stopwatch frequency " + Stopwatch.Frequency + ", raw QPC frequency " + rawFrequency);
+        Check(Math.Abs(swMs - rawMs) < 0.5, "the clock sync pair converts between clocks: " + swMs.ToString("0.00") + " vs " + rawMs.ToString("0.00") + " ms");
     }
 
     private static void NestingTest()
@@ -294,7 +335,7 @@ internal static class HarnessMain
         s.AddEvent(EventKind.Probe, (int)ProbeId.Shot, id, 120000, 60000, 0, 0, _time);
         s.AddEvent(EventKind.ShotLink, 0, id, 0, 0, 77, 0, _time);
         Tick(s, 25);
-        s.AddEvent(EventKind.Impact, 0, 0, 0, 0, 77, 1 | 3 << 8, _time);
+        s.AddEvent(EventKind.Impact, 0, 0, 0, 0, 77, 1 | 3 << 8 | 1 << 16, _time);
         for (int i = 0; i < 40; i++) { Tick(s, 7); }
         s.Finish();
 
@@ -319,13 +360,23 @@ internal static class HarnessMain
     private static void PatchTest()
     {
         var harmony = new Harmony("harness");
+        List<string> lines0 = null;
         foreach (ProbeLevel level in new[] { ProbeLevel.Stages })
         {
             List<string> lines = Probes.Install(harmony, level);
-            lines.AddRange(Isolation.Install(harmony, true, true, true, true));
+            lines0 = lines;
+            lines.AddRange(Isolation.Install(harmony, true, true, true, true, true, true));
             foreach (string line in lines) { Console.WriteLine("      " + line); }
-            Check(lines.Count >= 20 && lines.All(l => l.StartsWith("ok ") || l.StartsWith("ISOLATION ON ")), "every real target resolves and patches on this runtime: " + lines.Count);
+            // These two classes' static initializers call Unity, which is not loaded here, so they can only
+            // be patched in the game. HollywoodFX patches both of these exact methods in the game.
+            string[] needUnity = { "MuzzleManager.Shot", "Effects.Emit" };
+            foreach (string line in lines.Where(l => l.StartsWith("FAILED "))) { Console.WriteLine("      reason: " + line); }
+            bool Expected(string l) => l.StartsWith("ok ") || l.StartsWith("ISOLATION ON ") || needUnity.Any(n => l.StartsWith("FAILED " + n + ":"));
+            Check(lines.Count >= 30 && lines.All(Expected), "every target patches here except the 2 that need Unity: " + lines.Count(l => l.StartsWith("ok ") || l.StartsWith("ISOLATION ON ")) + " of " + lines.Count);
         }
+
+        Check(lines0.Contains("ok HollywoodFX.Patches.ShotDelegateWrapperPatch.OnShot") && lines0.Contains("ok HollywoodFX.ImpactController.Emit"), "HollywoodFX's own methods are found by name and timed when present");
+        ForeignModTest();
 
         // The real generic probe wrapper, run for real, then the warm-up that keeps it out of the JIT log.
         int prepared = Probes.Warm();
@@ -364,9 +415,97 @@ internal static class HarnessMain
         Check(ns < 2000, "probe overhead is well under a microsecond or two");
     }
 
+    // A stand-in for a mod like HollywoodFX: a prefix that does work and skips the original.
+    private static void ForeignModTest()
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var time = typeof(Probes).GetMethod("Time", flags);
+        var foreign = new HarmonyMethod(typeof(FakeMod).GetMethod(nameof(FakeMod.SlowSkippingPrefix)));
+
+        // Whichever patched first, the probe has to wrap the other mod's prefix.
+        var before = new Harmony("fake-mod-before");
+        before.Patch(typeof(FakeMuzzleManager).GetMethod(nameof(FakeMuzzleManager.PatchedFirstByMod)), foreign);
+        time.MakeGenericMethod(typeof(TagA)).Invoke(null, new object[] { new Harmony("timed-a"), typeof(FakeMuzzleManager).GetMethod(nameof(FakeMuzzleManager.PatchedFirstByMod)), ProbeId.MuzzleManagerShot });
+        time.MakeGenericMethod(typeof(TagB)).Invoke(null, new object[] { new Harmony("timed-b"), typeof(FakeMuzzleManager).GetMethod(nameof(FakeMuzzleManager.PatchedFirstByProbe)), ProbeId.EffectsEmit });
+        before.Patch(typeof(FakeMuzzleManager).GetMethod(nameof(FakeMuzzleManager.PatchedFirstByProbe)), foreign);
+
+        Session s = Fresh(10, 20);
+        Recorder.Current = s;
+        Recorder.ResetDepth();
+        Tick(s);
+        FakeMuzzleManager.OriginalRan = 0;
+        FakeMuzzleManager.PatchedFirstByMod();
+        FakeMuzzleManager.PatchedFirstByProbe();
+        Recorder.Current = null;
+        double Row(int i) => s.Events[i * Session.EventStride + Session.EventInclusive] * 1000.0 / Stopwatch.Frequency;
+        Check(FakeMuzzleManager.OriginalRan == 0, "the other mod's prefix skipped the original, as HollywoodFX's does");
+        Check(s.EventCount == 2 && Row(0) >= 0.9 && Row(1) >= 0.9, "the probe times the other mod's prefix in either patch order: " + (s.EventCount == 2 ? Row(0).ToString("0.00") + " and " + Row(1).ToString("0.00") + " ms" : s.EventCount + " rows"));
+
+        var text = new System.Text.StringBuilder();
+        HashSet<string> owners = DiagnosticsHost.AppendForeignPatches(text);
+        string listed = text.ToString();
+        Check(owners.Contains("Harness") && listed.Contains("FakeMuzzleManager.PatchedFirstByMod <- Harness prefix FakeMod") && !listed.Contains("Timed"), "the report names other mods' patches by assembly and kind, and not its own");
+    }
+
+    private struct TagA { }
+    private struct TagB { }
+
     [MethodImpl(MethodImplOptions.NoInlining)] private static int Probed(int x) { return x + 2; }
     [MethodImpl(MethodImplOptions.NoInlining)] private static int Bare(int x) { return x + 1; }
     [MethodImpl(MethodImplOptions.NoInlining)] private static int Patched(int x) { return x + 1; }
     private static void CostPrefix(out int __state) { __state = Recorder.Enter(); }
     private static void CostPostfix(int __state) { Recorder.Exit(0, __state); }
+}
+
+internal static class FakeMod
+{
+    public static bool SlowSkippingPrefix()
+    {
+        long end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 1000;
+        while (Stopwatch.GetTimestamp() < end) { }
+        return false;
+    }
+}
+
+internal static class FakeMuzzleManager
+{
+    public static int OriginalRan;
+
+    [MethodImpl(MethodImplOptions.NoInlining)] public static void PatchedFirstByMod() { OriginalRan++; }
+    [MethodImpl(MethodImplOptions.NoInlining)] public static void PatchedFirstByProbe() { OriginalRan++; }
+}
+
+// Stand-ins for HollywoodFX's real type and method names, as of its 4.1 source.
+namespace HollywoodFX.Patches
+{
+    internal class ShotDelegateWrapperPatch
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)] private static void OnShot(EFT.Ballistics.Shot shotResult) { }
+    }
+}
+
+namespace HollywoodFX
+{
+    internal class ImpactController
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)] public void Emit(object kinetics) { }
+    }
+
+    internal class ImpactEffects
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)] public void Emit(object kinetics) { }
+    }
+
+    internal class BattleAmbience
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)] public void Emit(object kinetics, float baseSizeScale) { }
+    }
+}
+
+namespace HollywoodFX.Gore
+{
+    internal class GoreController
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)] public void Apply(object kinetics) { }
+    }
 }

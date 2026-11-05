@@ -35,6 +35,21 @@ namespace FirstShotSmoothness.Diagnostics
         PlayHitEffect,
         ImpactEmit,
         ApplyShot,
+        MuzzleManagerShot,
+        EffectsEmit,
+        HfxOnShot,
+        HfxImpactEmit,
+        MoveAmmoToShellPort,
+        SetUsed,
+        MuzzleLightOnShot,
+        ReflexFlash,
+        PlayerOnDead,
+        BotsUpdate,
+        BotHearingInner,
+        AiTasks,
+        HfxGore,
+        HfxImpactEffects,
+        HfxBattleAmbience,
         Count
     }
 
@@ -62,9 +77,10 @@ namespace FirstShotSmoothness.Diagnostics
         {
             public ProbeId Id;
             public Type Type;
+            public string TypeName;
             public string Name;
             public Type[] Args;
-            public bool Quiet;
+            public double QuietMs;
             public Action<Harmony, MethodBase, ProbeId> Apply;
         }
 
@@ -89,7 +105,11 @@ namespace FirstShotSmoothness.Diagnostics
         private struct T4 { } private struct T5 { } private struct T6 { } private struct T7 { }
         private struct T8 { } private struct T9 { } private struct T10 { } private struct T11 { }
         private struct T12 { } private struct T13 { } private struct T14 { } private struct T15 { }
-        private struct T16 { }
+        private struct T16 { } private struct T17 { } private struct T18 { }
+        private struct T19 { } private struct T20 { } private struct T21 { } private struct T22 { }
+        private struct T23 { } private struct T24 { } private struct T25 { } private struct T26 { }
+        private struct T27 { } private struct T28 { } private struct T29 { } private struct T30 { }
+        private struct T31 { }
 
         private static void Time<TTag>(Harmony harmony, MethodBase method, ProbeId id)
         {
@@ -98,19 +118,34 @@ namespace FirstShotSmoothness.Diagnostics
             MethodInfo postfix = typeof(Timed<TTag>).GetMethod(nameof(Timed<TTag>.Postfix));
             prefix.MethodHandle.GetFunctionPointer();
             postfix.MethodHandle.GetFunctionPointer();
-            harmony.Patch(method, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
+            harmony.Patch(method, Outermost(prefix, Priority.First), Outermost(postfix, Priority.Last));
         }
 
         private static void Custom(Harmony harmony, MethodBase method, string prefix, string postfix)
         {
             harmony.Patch(method,
-                prefix == null ? null : new HarmonyMethod(typeof(Probes), prefix),
-                postfix == null ? null : new HarmonyMethod(typeof(Probes), postfix));
+                prefix == null ? null : Outermost(AccessTools.DeclaredMethod(typeof(Probes), prefix), Priority.First),
+                postfix == null ? null : Outermost(AccessTools.DeclaredMethod(typeof(Probes), postfix), Priority.Last));
+        }
+
+        /// <summary>
+        /// First in, last out, so a stage's time includes what other mods patched onto it, such
+        /// as HollywoodFX's prefixes on MuzzleManager.Shot and Effects.Emit. Without this, whether
+        /// their work was counted would depend on plugin load order.
+        /// </summary>
+        private static HarmonyMethod Outermost(MethodInfo patch, int priority)
+        {
+            return new HarmonyMethod(patch) { priority = priority };
         }
 
         private static Target Stage<TTag>(ProbeId id, Type type, string name, params Type[] args)
         {
             return new Target { Id = id, Type = type, Name = name, Args = args, Apply = Time<TTag> };
+        }
+
+        private static Target Foreign<TTag>(ProbeId id, string typeName, string name)
+        {
+            return new Target { Id = id, TypeName = typeName, Name = name, Apply = Time<TTag> };
         }
 
         private static Target[] Stages()
@@ -134,11 +169,52 @@ namespace FirstShotSmoothness.Diagnostics
                 Stage<T14>(ProbeId.BallisticsUpdate, typeof(BallisticsCalculator), nameof(BallisticsCalculator.ManualUpdate), typeof(float)),
                 Stage<T16>(ProbeId.PlayHitEffect, typeof(EffectsCommutator), nameof(EffectsCommutator.PlayHitEffect), typeof(Shot), typeof(PlayerHitInfo)),
                 Stage<T15>(ProbeId.ImpactEmit, typeof(Effects.Effect), nameof(Effects.Effect.Emit), typeof(Vector3), typeof(Vector3), typeof(BallisticCollider), typeof(bool), typeof(float), typeof(bool), typeof(bool), typeof(bool), typeof(EPointOfView)),
-                Stage<T0>(ProbeId.ApplyShot, typeof(Player), nameof(Player.ApplyShot), typeof(DamageInfo), typeof(EBodyPart), typeof(EBodyPartColliderType), typeof(EArmorPlateCollider), typeof(ShotId))
+                Stage<T0>(ProbeId.ApplyShot, typeof(Player), nameof(Player.ApplyShot), typeof(DamageInfo), typeof(EBodyPart), typeof(EBodyPartColliderType), typeof(EArmorPlateCollider), typeof(ShotId)),
+                Stage<T17>(ProbeId.MuzzleManagerShot, typeof(MuzzleManager), nameof(MuzzleManager.Shot), typeof(bool), typeof(float)),
+                Stage<T18>(ProbeId.EffectsEmit, typeof(Effects), nameof(Effects.Emit), typeof(MaterialType), typeof(BallisticCollider), typeof(Vector3), typeof(Vector3), typeof(float), typeof(bool), typeof(bool), typeof(EPointOfView)),
+
+                // HollywoodFX, when installed. Found by name, so nothing here depends on it. OnShot
+                // replaces the ballistics callback and runs before ClientGameWorld.ShotDelegate, so
+                // the impact hook alone cannot see it. Its impact work runs at Effects.Emit, in the
+                // hit frame, where the game's own effects wait for Effects.Update.
+                Foreign<T19>(ProbeId.HfxOnShot, "HollywoodFX.Patches.ShotDelegateWrapperPatch", "OnShot"),
+                Foreign<T20>(ProbeId.HfxImpactEmit, "HollywoodFX.ImpactController", "Emit"),
+                Foreign<T29>(ProbeId.HfxGore, "HollywoodFX.Gore.GoreController", "Apply"),
+                Foreign<T30>(ProbeId.HfxImpactEffects, "HollywoodFX.ImpactEffects", "Emit"),
+                Foreign<T31>(ProbeId.HfxBattleAmbience, "HollywoodFX.BattleAmbience", "Emit"),
+
+                // The round in the chamber and shell port, on every shot.
+                Stage<T21>(ProbeId.MoveAmmoToShellPort, typeof(Firearms), nameof(Firearms.MoveAmmoFromChamberToShellPort), typeof(bool), typeof(int)),
+                Stage<T22>(ProbeId.SetUsed, typeof(EFT.AssetsManager.AmmoPoolObject), nameof(EFT.AssetsManager.AmmoPoolObject.SetUsed), typeof(bool)),
+                Stage<T23>(ProbeId.MuzzleLightOnShot, typeof(MuzzleLight), nameof(MuzzleLight.OnShot)),
+                Stage<T24>(ProbeId.ReflexFlash, typeof(EFT.CameraControl.ReflexController), nameof(EFT.CameraControl.ReflexController.DoReflexTriggerFlash)),
+
+                // What combat costs apart from the shot: deaths, and the bots themselves.
+                Stage<T25>(ProbeId.PlayerOnDead, typeof(Player), nameof(Player.OnDead), typeof(EDamageType)),
+                Stage<T26>(ProbeId.BotsUpdate, typeof(BotsController), nameof(BotsController.UpdateByUnity)),
+                Stage<T27>(ProbeId.BotHearingInner, typeof(BotHearingSensor), nameof(BotHearingSensor.OnSoundPlayedInner), typeof(IPlayer), typeof(Vector3), typeof(float), typeof(AISoundType)),
+                Stage<T28>(ProbeId.AiTasks, typeof(AITaskManager), nameof(AITaskManager.Update)),
+
+                new Target { Id = ProbeId.Count, Type = typeof(Player), Name = nameof(Player.OnDead), Args = new[] { typeof(EDamageType) },
+                    Apply = (h, m, id) => Custom(h, m, nameof(KillPrefix), null) },
+                new Target { Id = ProbeId.Count, Type = typeof(Player), Name = nameof(Player.ApplyShot), Args = new[] { typeof(DamageInfo), typeof(EBodyPart), typeof(EBodyPartColliderType), typeof(EArmorPlateCollider), typeof(ShotId) },
+                    Apply = (h, m, id) => Custom(h, m, nameof(HitPrefix), null) }
             };
             foreach (Target target in targets)
             {
-                target.Quiet = target.Id == ProbeId.AudioQueueUpdate || target.Id == ProbeId.BallisticsUpdate;
+                switch (target.Id)
+                {
+                    case ProbeId.AudioQueueUpdate:
+                    case ProbeId.BallisticsUpdate:
+                    case ProbeId.SetUsed:
+                    case ProbeId.BotHearingInner:
+                    case ProbeId.AiTasks:
+                        target.QuietMs = 0.1;
+                        break;
+                    case ProbeId.BotsUpdate:
+                        target.QuietMs = 1.0;
+                        break;
+                }
             }
             return targets;
         }
@@ -152,6 +228,10 @@ namespace FirstShotSmoothness.Diagnostics
                     Apply = (h, m, id) => Custom(h, m, nameof(ShotPrefix), nameof(ShotPostfix)) },
                 new Target { Id = ProbeId.ShotDelegate, Type = typeof(ClientGameWorld), Name = nameof(ClientGameWorld.ShotDelegate), Args = new[] { typeof(Shot) },
                     Apply = (h, m, id) => Custom(h, m, nameof(ImpactPrefix), nameof(ImpactPostfix)) },
+                // Every new pooled round adds a Shell, so this marks each pool expansion, including
+                // a synchronous one in the middle of firing.
+                new Target { Id = ProbeId.Count, Type = typeof(Shell), Name = nameof(Shell.Awake), Args = Type.EmptyTypes,
+                    Apply = (h, m, id) => Custom(h, m, nameof(ShellAwakePrefix), null) },
                 new Target { Id = ProbeId.Count, Type = controller, Name = nameof(Player.FirearmController.SetTriggerPressed), Args = new[] { typeof(bool) },
                     Apply = (h, m, id) => Custom(h, m, nameof(TriggerPrefix), null) },
                 new Target { Id = ProbeId.Count, Type = controller, Name = nameof(Player.FirearmController.DryShot), Args = new[] { typeof(int), typeof(bool) },
@@ -160,6 +240,8 @@ namespace FirstShotSmoothness.Diagnostics
                     Apply = (h, m, id) => Custom(h, m, null, nameof(LinkPostfix)) }
             };
         }
+
+        public const string OptionalAbsent = "not installed ";
 
         /// <summary>Patches what the level calls for. Returns one line per target for the report.</summary>
         public static List<string> Install(Harmony harmony, ProbeLevel level)
@@ -181,25 +263,31 @@ namespace FirstShotSmoothness.Diagnostics
             }
             foreach (Target target in targets)
             {
-                string label = target.Type.Name + "." + target.Name;
-                MethodBase method = AccessTools.DeclaredMethod(target.Type, target.Name, target.Args);
-                if (method == null)
+                string label = (target.Type?.Name ?? target.TypeName) + "." + target.Name;
+                Type type = target.Type ?? AccessTools.TypeByName(target.TypeName);
+                if (type == null)
                 {
-                    lines.Add("MISSING " + label);
+                    lines.Add(OptionalAbsent + label);
                     continue;
                 }
                 try
                 {
+                    MethodBase method = AccessTools.DeclaredMethod(type, target.Name, target.Args);
+                    if (method == null)
+                    {
+                        lines.Add("MISSING " + label);
+                        continue;
+                    }
                     if (target.Id != ProbeId.Count)
                     {
-                        Recorder.Quiet[(int)target.Id] = target.Quiet;
+                        Recorder.QuietTicks[(int)target.Id] = (long)(target.QuietMs * Stopwatch.Frequency / 1000.0);
                     }
                     target.Apply(harmony, method, target.Id);
                     lines.Add("ok " + label);
                 }
                 catch (Exception e)
                 {
-                    lines.Add("FAILED " + label + ": " + e.Message);
+                    lines.Add("FAILED " + label + ": " + e.Message + " <- " + e.GetBaseException().GetType().Name);
                 }
             }
             return lines;
@@ -422,6 +510,51 @@ namespace FirstShotSmoothness.Diagnostics
             if (session != null && InLocalShot)
             {
                 session.AddEvent(EventKind.ShotLink, 0, Recorder.CurrentShot, 0, 0, __result.FireIndex, 0, Stopwatch.GetTimestamp());
+            }
+        }
+
+        /// <summary>A corpse's physics runs for a long time, so a death keeps this many frames.</summary>
+        private const int KillFramesAfter = 1500;
+
+        private static void KillPrefix(Player __instance)
+        {
+            Session session = Recorder.Current;
+            if (session == null)
+            {
+                return;
+            }
+            Player main = Singleton<GameWorld>.Instantiated ? Singleton<GameWorld>.Instance.MainPlayer : null;
+            long meters = main == null ? -1 : (long)Vector3.Distance(main.Position, __instance.Position);
+            session.AddEvent(EventKind.Kill, 0, 0, 0, 0, (long)Classify(__instance), meters, Stopwatch.GetTimestamp());
+            session.RetainFrames(KillFramesAfter);
+        }
+
+        private static void HitPrefix(Player __instance)
+        {
+            Session session = Recorder.Current;
+            if (session != null && __instance.IsYourPlayer)
+            {
+                session.AddEvent(EventKind.HitOnLocal, 0, 0, 0, 0, 0, 0, Stopwatch.GetTimestamp());
+            }
+        }
+
+        /// <summary>The player pressed the key because they felt a stutter.</summary>
+        public static void MarkFelt()
+        {
+            Session session = Recorder.Current;
+            if (session != null)
+            {
+                session.AddEvent(EventKind.FeltStutter, 0, 0, 0, 0, 0, 0, Stopwatch.GetTimestamp());
+                session.RetainFrames(60);
+            }
+        }
+
+        private static void ShellAwakePrefix()
+        {
+            Session session = Recorder.Current;
+            if (session != null && Environment.CurrentManagedThreadId == Recorder.MainThread)
+            {
+                session.AddEvent(EventKind.PoolObjectCreated, 0, Recorder.CurrentShot, 0, 0, 0, 0, Stopwatch.GetTimestamp());
             }
         }
 

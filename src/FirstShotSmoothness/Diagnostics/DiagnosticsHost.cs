@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -10,6 +10,7 @@ using BepInEx.Bootstrap;
 using BepInEx.Logging;
 using Comfort.Common;
 using EFT;
+using EFT.Settings;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -29,6 +30,8 @@ namespace FirstShotSmoothness.Diagnostics
         public bool IsolateAudio;
         public bool IsolateImpacts;
         public bool IsolateHearing;
+        public bool IsolateMuzzleLight;
+        public bool HideRounds;
     }
 
     /// <summary>
@@ -39,7 +42,7 @@ namespace FirstShotSmoothness.Diagnostics
     {
         private const double HitchFloorMs = 8;
         private const int KeptFrames = 1 << 17;
-        private const int EventRows = 1 << 17;
+        private const int EventRows = 1 << 18;
         private const int ShotRows = 1 << 16;
 
         private static readonly string[] FiringTypes =
@@ -47,7 +50,8 @@ namespace FirstShotSmoothness.Diagnostics
             "FirearmController", "FireOperation", "Firearms", "FirearmsEffects", "MuzzleManager", "WeaponSoundPlayer",
             "SuperBetterAudioQueue", "BetterAudio", "BetterSource", "BallisticsCalculator", "Shot", "Effects",
             "EffectsCommutator", "ClientGameWorld", "GameWorld", "ObjectsFactory", "Pools", "AIData",
-            "GlobalEventDispatcher", "BotHearingSensor", "ProceduralWeaponAnimation", "ShotEffector", "Player"
+            "GlobalEventDispatcher", "BotHearingSensor", "ProceduralWeaponAnimation", "ShotEffector", "Player",
+            "Muzzle", "Shell", "AmmoPool", "WeaponPrefab", "Decal", "Corpse", "Ragdoll", "BotsController", "BotOwner", "AITaskManager"
         };
 
         private static DiagnosticsSettings _settings;
@@ -78,8 +82,8 @@ namespace FirstShotSmoothness.Diagnostics
             }
 
             _patchLines = Probes.Install(harmony, settings.Level);
-            _patchLines.AddRange(Isolation.Install(harmony, settings.IsolateMuzzle, settings.IsolateAudio, settings.IsolateImpacts, settings.IsolateHearing));
-            foreach (string line in _patchLines.Where(l => !l.StartsWith("ok ") && !l.StartsWith("warmed ")))
+            _patchLines.AddRange(Isolation.Install(harmony, settings.IsolateMuzzle, settings.IsolateAudio, settings.IsolateImpacts, settings.IsolateHearing, settings.IsolateMuzzleLight, settings.HideRounds));
+            foreach (string line in _patchLines.Where(l => !l.StartsWith("ok ") && !l.StartsWith("warmed ") && !l.StartsWith(Probes.OptionalAbsent)))
             {
                 log.LogWarning(line);
             }
@@ -239,6 +243,11 @@ namespace FirstShotSmoothness.Diagnostics
             text.AppendLine("probe_level=" + _settings.Level);
             text.AppendLine();
 
+            // Mono's Stopwatch need not count in raw QPC units, which is what PresentMon writes.
+            text.AppendLine("[clock]");
+            ClockSync.Append(text);
+            text.AppendLine();
+
             text.AppendLine("[system]");
             text.AppendLine("cpu=" + SystemInfo.processorType);
             text.AppendLine("cpu_threads=" + SystemInfo.processorCount);
@@ -267,6 +276,8 @@ namespace FirstShotSmoothness.Diagnostics
             text.AppendLine("overhead " + _overheadLine);
             text.AppendLine();
 
+            AppendGameSettings(text);
+
             text.AppendLine("[plugins]");
             foreach (BepInEx.PluginInfo plugin in Chainloader.PluginInfos.Values.OrderBy(p => p.Metadata.GUID))
             {
@@ -281,7 +292,22 @@ namespace FirstShotSmoothness.Diagnostics
             text.AppendLine();
 
             text.AppendLine("[other_patches_on_firing_path]");
-            AppendForeignPatches(text);
+            HashSet<string> owners = AppendForeignPatches(text);
+            text.AppendLine();
+
+            // These mods' settings decide what the shot does, so a run is only comparable with
+            // the same values. Read once at raid start: a change made mid-raid is not recorded.
+            text.AppendLine("[settings_of_those_mods]");
+            foreach (BepInEx.PluginInfo plugin in Chainloader.PluginInfos.Values)
+            {
+                if (plugin.Instance != null && owners.Contains(plugin.Instance.GetType().Assembly.GetName().Name))
+                {
+                    foreach (KeyValuePair<BepInEx.Configuration.ConfigDefinition, BepInEx.Configuration.ConfigEntryBase> entry in plugin.Instance.Config)
+                    {
+                        text.AppendLine(plugin.Metadata.GUID + "|" + entry.Key.Section + "|" + entry.Key.Key + "=" + entry.Value.BoxedValue);
+                    }
+                }
+            }
             text.AppendLine();
 
             text.AppendLine("[player_loop]");
@@ -289,9 +315,47 @@ namespace FirstShotSmoothness.Diagnostics
             return text.ToString();
         }
 
-        /// <summary>Every Harmony patch by anyone else on a type in the firing path.</summary>
-        private static void AppendForeignPatches(StringBuilder text)
+        /// <summary>The game's own settings, read by reflection so a renamed one is just absent.</summary>
+        private static void AppendGameSettings(StringBuilder text)
         {
+            text.AppendLine("[game_settings]");
+            try
+            {
+                SettingsManager manager = Singleton<SettingsManager>.Instance;
+                foreach (string group in new[] { nameof(SettingsManager.Graphics), nameof(SettingsManager.PostFx), nameof(SettingsManager.Game), nameof(SettingsManager.Sound) })
+                {
+                    object provider = typeof(SettingsManager).GetField(group).GetValue(manager);
+                    object settings = provider.GetType().GetField("Settings", BindingFlags.Public | BindingFlags.Instance)?.GetValue(provider)
+                        ?? provider.GetType().GetProperty("Settings", BindingFlags.Public | BindingFlags.Instance)?.GetValue(provider);
+                    if (settings == null)
+                    {
+                        continue;
+                    }
+                    foreach (FieldInfo field in settings.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        PropertyInfo value = field.FieldType.GetProperty("Value");
+                        if (value != null)
+                        {
+                            text.AppendLine(group + "." + field.Name + "=" + value.GetValue(field.GetValue(settings)));
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                text.AppendLine("unavailable=" + e.GetType().Name + ": " + e.Message);
+            }
+            text.AppendLine();
+        }
+
+        /// <summary>
+        /// Every Harmony patch by anyone else on a type in the firing path, by the assembly that
+        /// owns it: SPT's patch class ids do not say which mod a patch belongs to. A prefix can
+        /// skip the original, so kinds matter. Returns the owning assemblies.
+        /// </summary>
+        internal static HashSet<string> AppendForeignPatches(StringBuilder text)
+        {
+            var owners = new HashSet<string>();
             foreach (MethodBase method in Harmony.GetAllPatchedMethods())
             {
                 Type type = method.DeclaringType;
@@ -300,13 +364,53 @@ namespace FirstShotSmoothness.Diagnostics
                     continue;
                 }
                 HarmonyLib.Patches info = Harmony.GetPatchInfo(method);
-                IEnumerable<string> owners = info.Owners.Where(o => o != FirstShotSmoothnessPlugin.PluginGuid);
-                string list = string.Join(" ", owners);
-                if (list.Length > 0)
-                {
-                    text.AppendLine(type.Name + "." + method.Name + " <- " + list);
-                }
+                AppendPatches(text, owners, method, info.Prefixes, "prefix");
+                AppendPatches(text, owners, method, info.Postfixes, "postfix");
+                AppendPatches(text, owners, method, info.Transpilers, "transpiler");
+                AppendPatches(text, owners, method, info.Finalizers, "finalizer");
             }
+            return owners;
+        }
+
+        private static void AppendPatches(StringBuilder text, HashSet<string> owners, MethodBase method, IEnumerable<HarmonyLib.Patch> patches, string kind)
+        {
+            foreach (HarmonyLib.Patch patch in patches)
+            {
+                Type declaring = patch.PatchMethod.DeclaringType;
+                if (declaring == null || (declaring.Namespace ?? "").StartsWith("FirstShotSmoothness", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                string owner = declaring.Assembly.GetName().Name;
+                owners.Add(owner);
+                text.AppendLine(method.DeclaringType.Name + "." + method.Name + " <- " + owner + " " + kind + " " + declaring.Name);
+            }
+        }
+    }
+
+    /// <summary>A matching pair of readings, to convert PresentMon's raw QPC to this report's clock.</summary>
+    internal static class ClockSync
+    {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool QueryPerformanceCounter(out long count);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool QueryPerformanceFrequency(out long frequency);
+
+        public static void Read(out long stopwatch, out long raw, out long rawFrequency)
+        {
+            QueryPerformanceFrequency(out rawFrequency);
+            long before = Stopwatch.GetTimestamp();
+            QueryPerformanceCounter(out raw);
+            stopwatch = before + (Stopwatch.GetTimestamp() - before) / 2;
+        }
+
+        public static void Append(StringBuilder text)
+        {
+            Read(out long stopwatch, out long raw, out long rawFrequency);
+            text.AppendLine("sync_stopwatch=" + stopwatch);
+            text.AppendLine("sync_raw_qpc=" + raw);
+            text.AppendLine("raw_qpc_frequency=" + rawFrequency);
         }
     }
 }

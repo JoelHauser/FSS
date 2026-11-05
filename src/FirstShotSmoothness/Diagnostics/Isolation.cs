@@ -17,7 +17,7 @@ namespace FirstShotSmoothness.Diagnostics
     /// </summary>
     internal static class Isolation
     {
-        public static List<string> Install(Harmony harmony, bool muzzle, bool audio, bool impacts, bool hearing)
+        public static List<string> Install(Harmony harmony, bool muzzle, bool audio, bool impacts, bool hearing, bool muzzleLight, bool hideRounds)
         {
             var lines = new List<string>();
             if (muzzle)
@@ -36,7 +36,63 @@ namespace FirstShotSmoothness.Diagnostics
             {
                 Skip(harmony, lines, AccessTools.DeclaredMethod(typeof(GlobalEventDispatcher), nameof(GlobalEventDispatcher.PlaySound), new[] { typeof(IPlayer), typeof(Vector3), typeof(float), typeof(AISoundType) }), nameof(SkipInLocalShot), "bot hearing");
             }
+            if (muzzleLight)
+            {
+                Skip(harmony, lines, AccessTools.DeclaredMethod(typeof(MuzzleLight), nameof(MuzzleLight.OnShot)), nameof(SkipInLocalShot), "muzzle light");
+            }
+            if (hideRounds)
+            {
+                Hook(harmony, lines, AccessTools.DeclaredMethod(typeof(Firearms), nameof(Firearms.SetRoundIntoWeapon), new[] { typeof(Ammo), typeof(int) }), nameof(HideChambered), "hide chambered round");
+                Hook(harmony, lines, AccessTools.DeclaredMethod(typeof(Firearms), nameof(Firearms.SetPatronInShellPort), new[] { typeof(EFT.AssetsManager.AmmoPoolObject), typeof(int) }), nameof(HideInPort), "hide round in shell port");
+                Hook(harmony, lines, AccessTools.DeclaredMethod(typeof(Firearms), nameof(Firearms.SpawnExtractingCartridge), new[] { typeof(Vector3), typeof(EFT.AssetsManager.AmmoPoolObject) }), nameof(ShowEjected), "show ejected case");
+            }
             return lines;
+        }
+
+        private static void Hook(Harmony harmony, List<string> lines, MethodBase method, string postfix, string label)
+        {
+            if (method == null)
+            {
+                lines.Add("ISOLATION MISSING " + label);
+                return;
+            }
+            harmony.Patch(method, null, new HarmonyMethod(typeof(Isolation), postfix));
+            lines.Add("ISOLATION ON " + label);
+        }
+
+        // Tests whether drawing the unseen round matters: the local player's round stays hidden
+        // inside the weapon and shows again once ejected. Rounds taken out some other way, such as
+        // clearing a jam, can stay hidden until a restart, which is one reason this is test-only.
+        private static void HideChambered(Firearms __instance, int chamberNumber)
+        {
+            if (__instance.Player != null && __instance.Player.IsYourPlayer)
+            {
+                SetDrawn(__instance._ammoObjectInWeapon[chamberNumber], false);
+            }
+        }
+
+        private static void HideInPort(Firearms __instance, EFT.AssetsManager.AmmoPoolObject ammoObject)
+        {
+            if (__instance.Player != null && __instance.Player.IsYourPlayer)
+            {
+                SetDrawn(ammoObject, false);
+            }
+        }
+
+        private static void ShowEjected(EFT.AssetsManager.AmmoPoolObject __result)
+        {
+            SetDrawn(__result, true);
+        }
+
+        private static void SetDrawn(EFT.AssetsManager.AmmoPoolObject round, bool drawn)
+        {
+            if (round != null)
+            {
+                foreach (Renderer renderer in round.GetComponentsInChildren<Renderer>(true))
+                {
+                    renderer.forceRenderingOff = !drawn;
+                }
+            }
         }
 
         private static void Skip(Harmony harmony, List<string> lines, MethodBase method, string prefix, string label)
