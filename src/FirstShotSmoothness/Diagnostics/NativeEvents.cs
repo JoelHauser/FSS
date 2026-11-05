@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 namespace FirstShotSmoothness.Diagnostics
@@ -21,6 +23,7 @@ namespace FirstShotSmoothness.Diagnostics
         public const long KindJitBegin = 1;
         public const long KindJitDone = 2;
         public const long KindGc = 3;
+        public const long KindMethodFree = 4;
 
         private const string Mono = "mono-2.0-bdwgc.dll";
         private const int Capacity = 1 << 17;
@@ -32,6 +35,7 @@ namespace FirstShotSmoothness.Diagnostics
         [DllImport(Mono)] private static extern void mono_profiler_set_jit_begin_callback(IntPtr handle, IntPtr cb);
         [DllImport(Mono)] private static extern void mono_profiler_set_jit_done_callback(IntPtr handle, IntPtr cb);
         [DllImport(Mono)] private static extern void mono_profiler_set_gc_event_callback(IntPtr handle, IntPtr cb);
+        [DllImport(Mono)] private static extern void mono_profiler_set_method_free_callback(IntPtr handle, IntPtr cb);
         [DllImport(Mono)] private static extern IntPtr mono_method_full_name(IntPtr method, int signature);
         [DllImport(Mono)] private static extern void mono_free(IntPtr ptr);
 
@@ -94,6 +98,7 @@ namespace FirstShotSmoothness.Diagnostics
                 IntPtr jitBegin = Place(code, ref at, Thunk(KindJitBegin));
                 IntPtr jitDone = Place(code, ref at, Thunk(KindJitDone));
                 IntPtr gc = Place(code, ref at, Thunk(KindGc));
+                IntPtr methodFree = Place(code, ref at, Thunk(KindMethodFree));
                 // rdtsc; shl rdx, 32; or rax, rdx; ret
                 IntPtr tsc = Place(code, ref at, new byte[] { 0x0F, 0x31, 0x48, 0xC1, 0xE2, 0x20, 0x48, 0x09, 0xD0, 0xC3 });
                 if (!VirtualProtect(code, (UIntPtr)4096, 0x20, out _))
@@ -109,6 +114,7 @@ namespace FirstShotSmoothness.Diagnostics
                 mono_profiler_set_jit_begin_callback(handle, jitBegin);
                 mono_profiler_set_jit_done_callback(handle, jitDone);
                 mono_profiler_set_gc_event_callback(handle, gc);
+                mono_profiler_set_method_free_callback(handle, methodFree);
 
                 Installed = true;
                 return true;
@@ -178,9 +184,11 @@ namespace FirstShotSmoothness.Diagnostics
 
         /// <summary>
         /// The method's full name. Touches runtime structures, so call it after the measured
-        /// interval. A dynamic method freed since it compiled would leave a stale pointer here,
-        /// which is why reports write these names last.
+        /// interval. Following a freed method's pointer crashes the game, and no exception can
+        /// catch that: only call this for a pointer <see cref="FreedMethods"/> has just cleared.
         /// </summary>
+        public const string UnreadableName = "<unreadable name>";
+
         public static string MethodName(IntPtr method)
         {
             IntPtr text = mono_method_full_name(method, 1);
@@ -188,9 +196,84 @@ namespace FirstShotSmoothness.Diagnostics
             {
                 return "?";
             }
-            string name = Marshal.PtrToStringAnsi(text);
-            mono_free(text);
+            try
+            {
+                return ReadName(text);
+            }
+            finally
+            {
+                mono_free(text);
+            }
+        }
+
+        /// <summary>
+        /// Reads the bytes itself: Marshal.PtrToStringAnsi throws on invalid UTF-8, and one
+        /// unreadable name then cost a report every name after it.
+        /// </summary>
+        public static string ReadName(IntPtr text)
+        {
+            int length = 0;
+            while (Marshal.ReadByte(text, length) != 0)
+            {
+                length++;
+            }
+            var bytes = new byte[length];
+            Marshal.Copy(text, bytes, 0, length);
+            string name = Encoding.UTF8.GetString(bytes);
+            foreach (char c in name)
+            {
+                if (c == '�' || char.IsControl(c))
+                {
+                    return UnreadableName;
+                }
+            }
             return name;
+        }
+    }
+
+    /// <summary>
+    /// Which methods the runtime has freed, from the ring's free events. Dynamic methods are freed
+    /// once collected, and that goes on after a raid, so refresh right before each name.
+    /// </summary>
+    internal sealed class FreedMethods
+    {
+        private readonly HashSet<long> _freed = new HashSet<long>();
+        private long _next;
+
+        public FreedMethods(long first)
+        {
+            _next = first;
+        }
+
+        public int Count => _freed.Count;
+
+        /// <summary>False if unread events were overwritten, so a free may have been missed.</summary>
+        public bool Refresh()
+        {
+            long end = NativeEvents.Count;
+            if (end - _next >= NativeEvents.RingCapacity)
+            {
+                return false;
+            }
+            for (; _next < end; _next++)
+            {
+                NativeEvents.Read(_next, out _, out long kind, out long arg, out _);
+                if (kind == NativeEvents.KindMethodFree)
+                {
+                    _freed.Add(arg);
+                }
+                else if (kind == NativeEvents.KindJitBegin || kind == NativeEvents.KindJitDone)
+                {
+                    // The allocator reused the address for a new, live method.
+                    _freed.Remove(arg);
+                }
+            }
+            return true;
+        }
+
+        public bool Contains(long method)
+        {
+            return _freed.Contains(method);
         }
     }
 }

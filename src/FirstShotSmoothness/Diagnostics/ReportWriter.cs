@@ -67,10 +67,18 @@ namespace FirstShotSmoothness.Diagnostics
             // Last, because resolving a name is the one step that follows a raw pointer.
             using (var jit = new StreamWriter(Path.Combine(folder, "jit_names.csv")))
             {
+                jit.AutoFlush = true;
                 jit.WriteLine("method_ptr,name");
+                var freed = new FreedMethods(native.First);
                 foreach (long method in methods)
                 {
-                    jit.WriteLine(I(method) + ",\"" + NativeEvents.MethodName((IntPtr)method).Replace("\"", "'") + "\"");
+                    if (!freed.Refresh())
+                    {
+                        // The rest can't be proven alive, and a wrong guess crashes the game.
+                        break;
+                    }
+                    string name = freed.Contains(method) ? "<freed>" : NativeEvents.MethodName((IntPtr)method);
+                    jit.WriteLine(I(method) + ",\"" + name.Replace("\"", "'") + "\"");
                 }
             }
         }
@@ -203,6 +211,10 @@ namespace FirstShotSmoothness.Diagnostics
                 {
                     NativeEvents.Read(i, out long tsc, out long kind, out long arg, out long thread);
                     long qpc = range.QpcStart + (long)((tsc - range.TscStart) * scale);
+                    if (kind == NativeEvents.KindMethodFree)
+                    {
+                        continue;
+                    }
                     if (kind == NativeEvents.KindGc)
                     {
                         arg &= 0xFFFFFFFF;

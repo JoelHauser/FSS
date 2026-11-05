@@ -17,7 +17,7 @@ namespace FirstShotSmoothness
     {
         public const string PluginGuid = "com.mybutthasarash.firstshotsmoothness";
         public const string PluginName = "First Shot Smoothness";
-        public const string PluginVersion = "0.0.3";
+        public const string PluginVersion = "0.0.5";
 
         private bool _diagnosticsRunning;
         private ConfigEntry<BepInEx.Configuration.KeyboardShortcut> _feltKey;
@@ -41,7 +41,7 @@ namespace FirstShotSmoothness
             ConfigEntry<string> label = Config.Bind("2. Diagnostics", "Run Label", "",
                 "Added to the report folder's name, for example T1-run3." + NextRaid);
 
-            _feltKey = Config.Bind("2. Diagnostics", "Felt A Stutter Key", new BepInEx.Configuration.KeyboardShortcut(UnityEngine.KeyCode.F9),
+            _feltKey = Config.Bind("2. Diagnostics", "Felt A Stutter Key", new BepInEx.Configuration.KeyboardShortcut(UnityEngine.KeyCode.Pause),
                 "Press this when you feel a stutter. The report then compares what you felt with what was measured. Pick something you can reach in a fight." + NextRaid);
 
             const string Isolate = "CAUSAL TEST ONLY, changes the game: ";

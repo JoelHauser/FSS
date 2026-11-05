@@ -7,8 +7,9 @@ docs/INVESTIGATION.md holds the findings, hypotheses and what each result leads 
 
 ## State
 
-0.0.3 is diagnostics only (HollywoodFX: INVESTIGATION.md section 8; hitch-centred tools: section 9), built against a mirror, **never run in game**. Waiting on the reports
-from docs/TEST-PROCEDURE.md. Repo https://github.com/JoelHauser/FSS.git (public). 0.0.3 is a GitHub pre-release with its zip; `dist/` is ignored, so build later ones with scripts\pack.ps1.
+0.0.5 is diagnostics only (HollywoodFX: INVESTIGATION.md section 8; hitch-centred tools: section 9; real raids: sections 10-13). 0.0.4 crashed the game at raid end; 0.0.5 is installed on `H:\SPT4.1.X`, uncommitted, and wrote a full report in one raid. Repo https://github.com/JoelHauser/FSS.git (public). 0.0.3 is the GitHub pre-release; `dist/` is ignored, so build later ones with scripts\pack.ps1.
+
+On the machine with `H:\SPT4.1.X` the install is patched: build against it directly, no mirror.
 
 ## Building on the work machine
 
@@ -59,6 +60,8 @@ failed check. It writes `<outdir>\synthetic`, which `tools/analyze.py` can read.
 - When reading native events in a test, freeze the end index first: the test's own code JITs too.
 - First-use cost varies hugely with disk state: the same 24 LINQ methods took 80 ms cold and about
   2.5 ms warm in the harness, so a cold run is not comparable to a warm one.
+- Never follow a method pointer without checking `FreedMethods` right before: a freed dynamic method
+  is a hard crash no try/catch can stop. Mono reuses addresses at once, so count free events, not pointers.
 
 ## Rules
 

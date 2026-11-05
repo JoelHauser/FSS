@@ -26,7 +26,7 @@ Unzip `FirstShotSmoothness-<version>.zip` over the SPT root. SPT 4.1.x, EFT 0.16
 | Frames Before Shot | 240 (30 to 1000) | Next raid |
 | Frames After Shot | 300 (30 to 2000) | Next raid |
 | Run Label | empty | Next raid |
-| Felt A Stutter Key | F9 | Next raid |
+| Felt A Stutter Key | Pause | Next raid |
 | Suppress Muzzle Effects, Weapon Audio, Impact Effects, Bot Hearing, Muzzle Light | false | Restart |
 | Hide Rounds Inside Weapon | false | Restart |
 

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using FirstShotSmoothness.Diagnostics;
 using HarmonyLib;
 
@@ -74,6 +75,15 @@ internal static class HarnessMain
             }
         }
         Check(named, "event names the method and the calling thread");
+
+        IntPtr bad = Marshal.AllocHGlobal(4);
+        Marshal.Copy(new byte[] { 0x41, 0xC3, 0x28, 0 }, 0, bad, 4);
+        Check(NativeEvents.ReadName(bad) == NativeEvents.UnreadableName, "a name with invalid UTF-8 reads as unreadable instead of throwing");
+        Marshal.Copy(new byte[] { 0x41, 0x2E, 0x42, 0 }, 0, bad, 4);
+        Check(NativeEvents.ReadName(bad) == "A.B", "a valid name reads unchanged");
+        Marshal.FreeHGlobal(bad);
+
+        FreedMethodTest();
 
         long beforeGc = NativeEvents.Count;
         int gcBefore = GC.CollectionCount(0);
@@ -159,6 +169,67 @@ internal static class HarnessMain
     }
 
     private static long _time = 1000000;
+
+    // What crashed the game: names read for dynamic methods that had since been freed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void MakeDynamicMethods(int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            var method = new System.Reflection.Emit.DynamicMethod("Throwaway" + i, typeof(int), new[] { typeof(string), typeof(object[]) }, typeof(string).Module, true);
+            var il = method.GetILGenerator();
+            il.Emit(System.Reflection.Emit.OpCodes.Ldc_I4, i);
+            il.Emit(System.Reflection.Emit.OpCodes.Ret);
+            ((Func<string, object[], int>)method.CreateDelegate(typeof(Func<string, object[], int>)))("x", null);
+        }
+    }
+
+    private static void FreedMethodTest()
+    {
+        long first = NativeEvents.Count;
+        MakeDynamicMethods(3000);
+        for (int i = 0; i < 6; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        var freed = new FreedMethods(first);
+        Check(freed.Refresh(), "free events fit in the ring");
+
+        // Count events, not addresses: the allocator reuses a freed method's address at once.
+        var compiled = new HashSet<long>();
+        int freeEvents = 0;
+        long end = NativeEvents.Count;
+        for (long i = first; i < end; i++)
+        {
+            NativeEvents.Read(i, out _, out long kind, out long arg, out _);
+            if (kind == NativeEvents.KindJitDone)
+            {
+                compiled.Add(arg);
+            }
+            else if (kind == NativeEvents.KindMethodFree)
+            {
+                freeEvents++;
+            }
+        }
+        Check(freeEvents > 2000, "dynamic methods raise free events: " + freeEvents + " of 3000");
+        int named = 0, skipped = 0, liveThrowaway = 0;
+        foreach (long method in compiled)
+        {
+            freed.Refresh();
+            if (freed.Contains(method))
+            {
+                skipped++;
+                continue;
+            }
+            named++;
+            if (NativeEvents.MethodName((IntPtr)method).Contains("Throwaway"))
+            {
+                liveThrowaway++;
+            }
+        }
+        Check(skipped > 0 && named > 0, "freed pointers are skipped, the rest resolve without a crash: " + skipped + " skipped, " + named + " named, " + liveThrowaway + " throwaways still alive");
+    }
 
     private static void Tick(Session s, double ms = 5)
     {

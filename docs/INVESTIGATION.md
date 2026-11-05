@@ -1,7 +1,7 @@
 # First Shot Smoothness: investigation record
 
-Status 2026-11-05: Stage A (inspection) and Stage B (diagnostics) done, build 0.0.3. **No cause is
-established and no optimization exists.**
+Status 2026-11-05: Stage A (inspection) and Stage B (diagnostics) done, build 0.0.5, four real raids
+reported (sections 10 to 13). **No cause is established and no optimization exists.**
 
 **What the user reports (the symptom, not yet measured):** the stutter happens occasionally when
 firing at nothing and consistently in gunfights. They run HollywoodFX, and not ReShade or
@@ -283,3 +283,139 @@ this mod should do silently.
 **Still blind to:** worker-thread and GPU time, except as main-thread waiting; Mono type and
 assembly loading apart from compiles; delayed bot reactions beyond the bot-update probes; and
 anything outside the process except what the capture script reads.
+
+## 10. First real raid (0.0.3, Reserve, 2026-11-05)
+
+One raid on `H:\SPT4.1.X`, 65 local shots, 15,497 frames kept, nothing dropped. One raid is not proof:
+everything here is **Observed** for this run and **Inferred** as a pattern.
+
+Problems with the run:
+
+- All 10 felt-stutter presses also toggled Camera Mode, which shares F9, so they are 5 on/off pairs,
+  not felt stutters. Disregard them. No local shot fell inside a Camera Mode window, so the shot data
+  stands. Camera Mode's Freeze was also used during the raid. 0.0.4 moves the key to Pause.
+- `jit_names.csv` stopped at 9,736 of 24,083 methods: one name was not valid UTF-8 and
+  `Marshal.PtrToStringAnsi` threw. Fixed in 0.0.4. The largest JIT item, 678 ms, is an unnamed pointer.
+  Pointers change per launch, so this report cannot name it.
+
+Results:
+
+| Measure | Result |
+|---|---|
+| Repeat shots | n=64, median 1.29 ms over baseline, 7 spikes |
+| Spike frames near a local shot | 5%, the same as other kept frames (kept frames are not a random sample) |
+| First shot | +104.8 ms: 90.3 ms waiting on last frame/present, JIT only 12.5 ms |
+| Your impacts on a body | n=13, median +10.89 ms, worst +100.75 ms |
+| Your impacts on the world | n=36, median +0.87 ms, worst +24.74 ms |
+| Kill at shot 32 | +100.7 ms: JIT 514 methods 68.1 ms, `PlayerOnDead` 40.93 ms inside `ApplyShot` 42.71 ms |
+| Shots 34, 36, 57, 58 | +11 to +23 ms in render submit, with little or no JIT or timed script work |
+| Baseline frame time | 13.76 ms over the first 16 shots, 18.63 ms over the last 16 |
+
+Reading (**Inferred**): firing itself is usually cheap here. Fights may stutter because hits and kills
+cost more than shots, which fits the symptom, and a separate render-side cost appears on some shots.
+The first shot looks like a main-thread wait rather than JIT; a wait does not show its cause.
+
+Next: a raid on 0.0.4 with Camera Mode unused, to name the JIT items and get real felt-stutter marks,
+with PresentMon for the first-shot wait.
+
+## 11. Second raid (0.0.4, Factory, 2026-11-05) and the crash
+
+0.0.4 crashed the game at raid end, in the menu: access violation in `mono_method_full_name`, called
+by the report writer (**Observed**: Player.log stack, Windows event 1000). 0.0.3's exception had been
+stopping the writer before it reached a stale pointer, so 0.0.4's name fix exposed the crash. 0.0.5
+records Mono's `method_free` event and never resolves a freed pointer. The harness saw 2,931 of 3,000
+dynamic methods raise it, on the game's runtime. **Untested in game.** A method freed in the moment
+between the check and the read is still a possible crash, as is a wrapper whose data went with a freed
+method without an event of its own. Names are flushed line by line, so a crash keeps what was read.
+
+The report has everything but the last of `jit_names.csv` (about 9,990 of 27,237 names). Probe Level was
+EventsOnly, so per-stage timing is missing. No felt-stutter presses.
+
+| Measure | Reserve | Factory |
+|---|---|---|
+| Repeat shots, median over baseline | +1.29 ms (n=64) | +1.10 ms (n=68) |
+| Repeat shots that spiked | 7 | 8 |
+| Impacts on a body, median | +10.89 ms (n=13) | +4.54 ms (n=12) |
+| Impacts on the world, median | +0.87 ms (n=36) | +0.68 ms (n=92) |
+| Spike frames near a local shot vs other kept frames | 5% / 5% | 4% / 4% |
+| One huge mid-raid hitch, no shot near it | frame 7024: +9.6 s, 9,449 methods, 3.5 s JIT | frame 7542: +8.8 s, 9,408 methods, 3.3 s JIT |
+| Largest single JIT item, unnamed | 678 ms | 797 ms |
+
+Repeated across both raids (**Observed**): repeat shots stay cheap, body hits cost more than world hits,
+and one mid-raid frame compiles about 9,400 methods. The first shot did not repeat: +105 ms on Reserve,
++15 ms on Factory, so the Reserve wait was not a fixed first-shot cost. Factory's larger shot spikes were
+JIT inside `ShotDelegate` (shot 51, +81 ms, 59.7 ms of JIT) and GC pauses of 25-31 ms alongside a wait
+for last frame/present (shots 43, 53).
+
+Next: a raid on 0.0.5 at Probe Level Stages, to name the 9,400-method hitch and the largest JIT item.
+
+## 12. Third raid (0.0.5, Factory, 2026-11-05)
+
+0.0.5 wrote a full report with no crash: 28,751 names, 243 freed and skipped, 0 unreadable. Probe Level
+was still EventsOnly. 101 local shots, 154 bot shots. One felt-stutter press, with no spike before it.
+
+**The ~9 s mid-raid freeze is ModProfiler (Observed in this raid).** Frame 4015's first compiles are
+`WebPanelController:TogglePanel` then `Instrumenter:InstrumentAll`, and its config says the first
+activation instruments all mod code and can freeze the game. It is F11, and it is not a firing or
+game cost. The first two raids show the same 9,400-method frame, but their names were lost, so
+ModProfiler is **Inferred** there. Median frame time around that frame did not rise on either Factory
+run (15.9 to 15.9, 15.7 to 15.6 ms); Reserve rose 14.6 to 16.6 ms.
+
+**The first body hit of a launch compiles about 510 methods (Observed, 3 of 3 raids).**
+
+| Raid | Frame of first body impact | Frame time | Compiles |
+|---|---|---|---|
+| Reserve | 10086 | 117.8 ms | 514 |
+| Factory, 0.0.4 | 8778 | 96.5 ms | 527 |
+| Factory, 0.0.5 | 5586 | 104.9 ms | 507 |
+
+The compiles are the hit path: `BodyPartCollider`, armor, `ApplyShot`, `ProceedLocalAbsorbedDamage`,
+HollywoodFX gore, `BotMemory`, statistics, quest checkers, ORBIT's death diagnostics. Each raid was the
+first of its launch, so a later raid should not pay this; that is **Untested**.
+
+Caveat: ModProfiler was activated before the first body hit in all three raids, so these counts and
+the repeat costs below include whatever it adds. A raid without F11 is needed.
+
+Later body hits still cost more (median +7.80 ms against +1.15 ms for world, n=78 and 95), and shots 36
+and 73 reached +58 and +62 ms, with a 34.6 ms GC pause on shot 36. Without Stages timing, the
+15 ms `scripts LateUpdate` frames on shots 22, 54 and 68 can't be attributed.
+
+Next: a raid at Probe Level Stages without ever pressing F11, then a second raid in the same launch to
+test whether the first-body-hit cost is once per launch.
+
+## 13. Fourth raid (0.0.5, Factory, Stages, no ModProfiler, 2026-11-05)
+
+The first clean run: Probe Level Stages, `Instrumenter` never compiled. 94 local shots, 39 bot shots,
+no felt-stutter presses. The ~9 s frame is gone, which confirms section 12's ModProfiler reading.
+
+**First-use JIT without ModProfiler (Observed).** First body hit: frame 3474, 53.6 ms, 236 compiles, and
+it was also the first shot of the launch. First kill: frame 3684, 52.8 ms, 339 compiles. Together
+that is about the 510 compiles of the earlier raids, where hit and kill fell in one frame (**Inferred**).
+
+**Periodic GC is the largest repeating cost found so far (H6).** In both Factory raids measured for it:
+
+| | Stages raid | EventsOnly raid |
+|---|---|---|
+| GC pauses in the play window | 83 in 332 s | 80 in 321 s |
+| Within 3 s after a local shot | 14.2 per minute | 12.5 per minute |
+| Otherwise | 15.1 per minute | 15.7 per minute |
+| Pauses over 20 ms | 40 | 39 |
+
+Pauses come in pairs, about 10 ms then about 30 ms, 0.1 to 0.2 s apart, with a median 8.26 s between
+the large ones (Stages raid). A frame containing a large one has a median of 62.8 ms against a baseline
+near 19 ms. The rate does not change in fights, so **fights do not cause it**. The worst repeat shots
+(71, 72, 100: about +50 ms) are this GC landing near a shot: 44.71 ms in `CreateItem` on 71 and 72 is a
+32.9 ms GC pause inside it, not slow item creation. Whether the period comes from a timer or a steady
+allocation rate is **Untested**.
+
+Why GC runs at all (**Observed** in code path and JIT order): this PC has 31.8 GB, so `BaseLocalGame`
+would disable GC in raid (25 GB rule). Skills Extended's `AutomaticCollection:BeforeMode` intercepts that
+(`Automatic garbage collection during raids = true`, default on). SPT's `MemoryCollectionPatch` also
+called `CollectIncremental` at the inventory open at t=131 s. The managed heap went from 1.87 to 2.30 GB.
+
+Whether this is what the user feels is **Inferred**: a 60+ ms frame every 8 s is more often noticed in a
+fight, which would fit "occasional when firing at nothing, consistent in gunfights", but no felt press
+has confirmed it.
+
+Next: causal test. Same raid with that Skills Extended setting off and the inventory left closed, with
+`Run Label` set. Memory will grow during it, and that tradeoff must be measured before any fix.

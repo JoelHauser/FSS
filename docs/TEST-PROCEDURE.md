@@ -13,8 +13,8 @@ Round 1, because that's the setup where you get the stutter.
 2. Start the game once, then quit. This creates
    `BepInEx\config\com.mybutthasarash.firstshotsmoothness.cfg`.
 3. In that file set `Diagnostics Enabled = true`.
-4. Set `Felt A Stutter Key` to something you can hit mid-fight. The default is F9, which I haven't
-   checked against your keybinds. A spare mouse side button works too (`Mouse3` or `Mouse4`).
+4. Set `Felt A Stutter Key` to something you can hit mid-fight. The default is Pause. Don't use F9:
+   Camera Mode and the lacyway free cam use it, and toggling them spikes the frames being measured. A spare mouse side button works too (`Mouse3` or `Mouse4`).
 5. Get [PresentMon](https://github.com/GameTechDev/PresentMon), the console exe, from its releases
    page. It shows the frames your display actually got, which this mod can't see.
 6. Copy this repo's `scripts` folder somewhere on that PC.
