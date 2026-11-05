@@ -7,7 +7,7 @@ docs/INVESTIGATION.md holds the findings, hypotheses and what each result leads 
 
 ## State
 
-0.0.5 is diagnostics only (HollywoodFX: INVESTIGATION.md section 8; hitch-centred tools: section 9; real raids: sections 10-13). 0.0.4 crashed the game at raid end; 0.0.5 is installed on `H:\SPT4.1.X`, uncommitted, and wrote a full report in one raid. Repo https://github.com/JoelHauser/FSS.git (public). 0.0.3 is the GitHub pre-release; `dist/` is ignored, so build later ones with scripts\pack.ps1.
+0.0.5 is diagnostics only (HollywoodFX: INVESTIGATION.md section 8; hitch-centred tools: section 9; real raids: sections 10-13). 0.0.4 crashed the game at raid end; 0.0.5 is installed on `H:\SPT4.1.X` and wrote a full report in one raid. Repo https://github.com/JoelHauser/FSS.git (public). 0.0.3 is the GitHub pre-release; `dist/` is ignored, so build later ones with scripts\pack.ps1.
 
 On the machine with `H:\SPT4.1.X` the install is patched: build against it directly, no mirror.
 
