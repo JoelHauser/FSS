@@ -8,8 +8,7 @@ docs/INVESTIGATION.md holds the findings, hypotheses and what each result leads 
 ## State
 
 0.0.3 is diagnostics only (HollywoodFX: INVESTIGATION.md section 8; hitch-centred tools: section 9), built against a mirror, **never run in game**. Waiting on the reports
-from docs/TEST-PROCEDURE.md. Repo https://github.com/JoelHauser/FSS.git (public). The zip is
-not attached to any release yet; `dist/` is ignored, so rebuild it with scripts\pack.ps1.
+from docs/TEST-PROCEDURE.md. Repo https://github.com/JoelHauser/FSS.git (public). 0.0.3 is a GitHub pre-release with its zip; `dist/` is ignored, so build later ones with scripts\pack.ps1.
 
 ## Building on the work machine
 
